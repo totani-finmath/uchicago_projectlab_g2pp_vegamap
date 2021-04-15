@@ -1,13 +1,19 @@
-#%% packages
+#%% ##################################################
+# import packages
+# ####################################################
 import numpy as np
 import pandas as pd
 import scipy.integrate as itg
 
-#%% constants
+#%% ##################################################
+# constants
+# ####################################################
 T = np.linspace(2.0, 7.0, num=11)
 tau = [t2 - t1 for t1, t2 in zip(T[:-1], T[1:])]
 
-#%% parameters
+#%% ##################################################
+# parameters
+# ####################################################
 alpha1 = 0.01
 alpha2 = 0.02
 sigma1 = 0.1
@@ -15,7 +21,9 @@ sigma2 = 0.2
 rho = 0.1
 X = 0.50
 
-#%% functions: convert parameters
+#%% ##################################################
+# functions: convert parameters
+# ####################################################
 def M_x_g2pp(s,t,T,alpha1,alpha2,sigma1,sigma2,rho):
     trm1 = (sigma1**2/alpha1**2 + rho*(sigma1*sigma2)/alpha1/alpha2) * (1.0 - np.exp(-alpha1*(t-s)))
     trm2 = -1.0 * sigma1**2*0.5/alpha1**2 * (np.exp(-alpha1*(T-t)) - np.exp(-alpha1*(T+t-2*s)))
@@ -38,7 +46,9 @@ def ci(i):
     else:
         return 1.0 + X * tau(i)
 
-#%% functions: bond pricings
+#%% ##################################################
+# functions: bond pricings
+# ####################################################
 def V(t,T,alpha1,alpha2,sigma1,sigma2,rho):
     f1 = lambda x: (1.0-np.exp(-alpha1*(T-x)))**2
     trm1 = sigma1**2/alpha1**2 * itg.quad(f1,t,T)
@@ -54,7 +64,9 @@ def A(t,T,alpha1,alpha2,sigma1,sigma2,rho):
 def B(z,t,T):
     return (1.0-np.exp(-z*(T-t)))/z
 
-#%% functions: input functionals
+#%% ##################################################
+# functions: input functionals
+# ####################################################
 def h1(x,y_bar,mu_x,mu_y,rho_xy):
     return (y_bar - mu_y)/sigma_y/np.sqrt(1.0-rho_xy**2) - rho_xy*(x-mu_x)/sigma_x/np.sqrt(1.0-rho_xy**2)
 def h2(x,i,sigma_y,rho_xy):
@@ -65,7 +77,9 @@ def kappa(x,A_i,B_bi):
     trm = mu_y - 0.5*(1.0-rho_xy**2)*sigma_y**2*B_bi + rho_xy*sigma_y*(x-mu_x)/sigma_x
     return (-1.0)*B_bi*trm
 
-#%% optimization
+#%% ##################################################
+# optimization
+# ####################################################
 
 
 
