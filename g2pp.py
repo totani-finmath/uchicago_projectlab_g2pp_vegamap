@@ -12,8 +12,8 @@ import time as tm
 #%% --------------------------------------------------
 # constants
 # ----------------------------------------------------
-upr_itg = .05
-lwr_itg = -.05
+upr_itg = np.inf
+lwr_itg = -np.inf
 y_bar_init = 0.001
 
 #%% --------------------------------------------------
@@ -53,11 +53,11 @@ def swap_rate(ts,t=0.0):
 #%% --------------------------------------------------
 # parameters initial
 # ----------------------------------------------------
-alpha1 = 0.001
-alpha2 = 0.002
-sigma1 = 0.002
-sigma2 = 0.003
-rho    = 0.4
+alpha1 = 0.5
+alpha2 = 2.5
+sigma1 = 1.0
+sigma2 = 0.1
+rho    = 0.1
 # aggregate
 params = [alpha1, alpha2, sigma1, sigma2, rho]
 
@@ -177,7 +177,7 @@ print(test)
 #%% --------------------------------------------------
 # test: plot
 # ----------------------------------------------------
-xs = np.linspace(-.05, .05, num=100)
+xs = np.linspace(-10.0, 10.0, num=100)
 ys = np.array([swpn_integrand_g2pp(x,params,contract) for x in xs])
 plt.plot(xs,ys)
 
@@ -231,7 +231,8 @@ for i in range(len(lst_data)):
     omega = 1
     # swaption price
     price = vol_to_price_normal(swp_atm,swp_atm,mem[2],omega,ts)
-    contract = {'grids'  : ts,
+    contract = {'tenor'  : (mem[0],mem[1]),
+                'grids'  : ts,
                 'strike' : swp_atm,
                 'side'   : omega,
                 'price'  : price}
@@ -268,12 +269,47 @@ if is_calib:
     lst_bounds = [(1.0e-5,5.0),(1.0e-5,5.0),(1.0e-5,5.0),(1.0e-5,5.0),(-1.0,1.0)]
     time_stt = tm.time()
     #res = opt.minimize(opt_objective_g2pp,params_init,method='BFGS',args=(lst_contracts),bounds=lst_bounds)
-    res = opt.minimize(opt_objective_g2pp,params_init,args=(lst_contracts),bounds=lst_bounds)
+    res = opt.minimize(opt_objective_g2pp,params_init,method='Powell',args=(lst_contracts),bounds=lst_bounds)
     time_end = tm.time()
-    time_exe = time_stt - time_end
+    time_exe = time_end - time_stt
+    print(time_exe/60.0,'[min]')
 
+#%% --------------------------------------------------
+# review results
+# ----------------------------------------------------
+'''
+method='Powell'
+upr_itg = .05
+lwr_itg = -.05
+params_init = [0.001, 0.002, 0.002, 0.003, 0.4]
+246.8477235476176 [sec]
 
+direc: array([[ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+         0.00000000e+00,  1.00000000e+00],
+       [ 0.00000000e+00,  1.00000000e+00,  0.00000000e+00,
+         0.00000000e+00,  0.00000000e+00],
+       [-4.44936328e-02, -4.19636525e-07, -1.24152812e-01,
+         9.76379925e-02,  9.01453197e-02],
+       [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+         1.00000000e+00,  0.00000000e+00],
+       [-1.27004455e-01, -2.32553706e-07, -7.39658869e-02,
+        -7.10696844e-01, -5.99126260e-01]])
+     fun: 0.018215286868240387
+ message: 'Optimization terminated successfully.'
+    nfev: 1180
+     nit: 14
+  status: 0
+ success: True
+       x: array([ 7.77377369e-01,  4.95408639e+00,  1.04683673e+00,  3.39108309e-05,
+       -5.89169127e-01])
+'''
 
+params_new = [7.77377369e-01, 4.95408639e+00, 1.04683673e+00, 3.39108309e-05, -5.89169127e-01]
+for cont in lst_contracts:
+    price = swpn_price_g2pp(params_new,cont)
+    print('Tenor >> ', cont['tenor'])
+    print('G2++ price   :', price)
+    print('Market price :', cont['price'])
 
 
 
