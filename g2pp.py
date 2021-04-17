@@ -3,39 +3,43 @@
 # ----------------------------------------------------
 import numpy as np
 import pandas as pd
-import scipy.integrate as itg
-from scipy.stats import norm
+from scipy import integrate as itg
 from scipy import optimize as opt
+from scipy.stats import norm
 from matplotlib import pyplot as plt
 import time as tm
+import pickle as pk
 
 #%% --------------------------------------------------
 # constants
 # ----------------------------------------------------
 upr_itg = np.inf
 lwr_itg = -np.inf
+upr_itg = 100.0
+lwr_itg = -100.0
 y_bar_init = 0.001
+lst_bounds = [(1.0e-5,5.0), (1.0e-5,5.0), (1.0e-5,5.0), (1.0e-5,5.0), (-1.0,1.0)]
 
 #%% --------------------------------------------------
 # contracts sample
 # ----------------------------------------------------
-t_mat = 5.0
-t_tnr = 10.0
+t_mat = 2.0
+t_tnr = 5.0
 X = 0.01
 omega = 1
-num_grid = int(t_tnr * 4) + 1
-ts = np.linspace(t_mat, t_mat+t_tnr, num=num_grid)
-# aggregate
-contract = {'grids'  : ts,
-            'strike' : X,
-            'side'   : omega}
+def build_contract(t_mat,t_tnr,strike,omega):
+    num_grid = int(t_tnr * 4) + 1
+    ts = np.linspace(t_mat, t_mat+t_tnr, num=num_grid)
+    contract = {'grids':ts,'strike':X,'side': omega}
+    return contract
+contract = build_contract(t_mat,t_tnr,X,omega)
 
 #%% --------------------------------------------------
 # sample market data
 # ----------------------------------------------------
 # bond
 r_flat = 0.01
-# assumed market pbservable
+# assumed market observable
 def PM(t,T,r=r_flat):
     return np.exp(-r*(T-t))
 # assumed G2++ calibrated
@@ -53,13 +57,13 @@ def swap_rate(ts,t=0.0):
 #%% --------------------------------------------------
 # parameters initial
 # ----------------------------------------------------
-alpha1 = 0.5
-alpha2 = 2.5
-sigma1 = 1.0
-sigma2 = 0.1
-rho    = 0.1
+alpha1_init = 1.0
+alpha2_init = 0.1
+sigma1_init = 0.2
+sigma2_init = 0.01
+rho_init    = -0.8
 # aggregate
-params = [alpha1, alpha2, sigma1, sigma2, rho]
+params_init = [alpha1_init, alpha2_init, sigma1_init, sigma2_init, rho_init]
 
 #%% ##################################################
 # G2++ implementation
@@ -171,14 +175,24 @@ def swpn_price_g2pp(params,contract):
 #%% --------------------------------------------------
 # test: pricing
 # ----------------------------------------------------
-test = swpn_price_g2pp(params,contract)
-print(test)
+# test setting
+t_mat_test = 1.0
+t_tnr_test = 5.0
+omega_test = 1
+# test preparation
+num_grid_test = int(t_tnr_test * 4) + 1
+ts_test = np.linspace(t_mat_test, t_mat_test+t_tnr_test, num=num_grid_test)
+X_test = swap_rate(ts_test)
+cont_test = build_contract(t_mat_test,t_tnr_test,X_test,omega_test)
+# calculation
+price_test = swpn_price_g2pp(params_init,cont_test)
+print('test price',t_mat_test,'x',t_tnr_test,':',price_test)
 
 #%% --------------------------------------------------
 # test: plot
 # ----------------------------------------------------
 xs = np.linspace(-10.0, 10.0, num=100)
-ys = np.array([swpn_integrand_g2pp(x,params,contract) for x in xs])
+ys = np.array([swpn_integrand_g2pp(x,params_init,cont_test) for x in xs])
 plt.plot(xs,ys)
 
 #%% ##################################################
@@ -256,55 +270,51 @@ def opt_objective_g2pp(params, lst_contracts):
 #rerr = opt_objective_g2pp(params,lst_contracts)
 for cont in lst_contracts:
     price = swpn_price_g2pp(params,cont)
-    print(cont['grids'])
+    print(cont['tenor'])
     print(price)
 
 #%% --------------------------------------------------
 # calibration
 # ----------------------------------------------------
 # optimizer
-is_calib = True
+is_calib = False
 if is_calib:
     params_init = params.copy()
-    lst_bounds = [(1.0e-5,5.0),(1.0e-5,5.0),(1.0e-5,5.0),(1.0e-5,5.0),(-1.0,1.0)]
     time_stt = tm.time()
     #res = opt.minimize(opt_objective_g2pp,params_init,method='BFGS',args=(lst_contracts),bounds=lst_bounds)
     res = opt.minimize(opt_objective_g2pp,params_init,method='Powell',args=(lst_contracts),bounds=lst_bounds)
     time_end = tm.time()
     time_exe = time_end - time_stt
     print(time_exe/60.0,'[min]')
+    pk.dump(res,open('res_calib_org.pk','wb'))
+else:
+    res = pk.load(open('res_calib_org.pk','rb'))
 
 #%% --------------------------------------------------
 # review results
 # ----------------------------------------------------
 '''
 method='Powell'
-upr_itg = .05
-lwr_itg = -.05
-params_init = [0.001, 0.002, 0.002, 0.003, 0.4]
-246.8477235476176 [sec]
+upr_itg = np.inf
+lwr_itg = -np.inf
+params_init = [0.5, 2.5, 1.00, 0.1, 0.1]
+508.2066081007322 [min]
 
-direc: array([[ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
-         0.00000000e+00,  1.00000000e+00],
-       [ 0.00000000e+00,  1.00000000e+00,  0.00000000e+00,
-         0.00000000e+00,  0.00000000e+00],
-       [-4.44936328e-02, -4.19636525e-07, -1.24152812e-01,
-         9.76379925e-02,  9.01453197e-02],
-       [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
-         1.00000000e+00,  0.00000000e+00],
-       [-1.27004455e-01, -2.32553706e-07, -7.39658869e-02,
-        -7.10696844e-01, -5.99126260e-01]])
-     fun: 0.018215286868240387
+direc: array([[ 1.        ,  0.        ,  0.        ,  0.        ,  0.        ],
+       [ 0.        ,  1.        ,  0.        ,  0.        ,  0.        ],
+       [ 0.        ,  0.        ,  0.        ,  0.        ,  1.        ],
+       [ 0.        ,  0.        ,  0.        ,  1.        ,  0.        ],
+       [ 0.01191397, -0.48691017, -0.04548408,  0.00980303, -0.06100452]])
+     fun: 0.020514307912352633
  message: 'Optimization terminated successfully.'
-    nfev: 1180
-     nit: 14
+    nfev: 268
+     nit: 4
   status: 0
  success: True
-       x: array([ 7.77377369e-01,  4.95408639e+00,  1.04683673e+00,  3.39108309e-05,
-       -5.89169127e-01])
+       x: array([ 4.84108185,  4.137148  ,  1.17343152,  0.07240115, -0.00771107])
 '''
 
-params_new = [7.77377369e-01, 4.95408639e+00, 1.04683673e+00, 3.39108309e-05, -5.89169127e-01]
+params_new = [4.84108185,  4.137148  ,  1.17343152,  0.07240115, -0.00771107]
 for cont in lst_contracts:
     price = swpn_price_g2pp(params_new,cont)
     print('Tenor >> ', cont['tenor'])
