@@ -1,14 +1,21 @@
 #%% --------------------------------------------------
 # import packages
 # ----------------------------------------------------
+# numerical
 import numpy as np
 import pandas as pd
 from scipy import integrate as itg
 from scipy import optimize as opt
 from scipy.stats import norm
-from matplotlib import pyplot as plt
+# helper
 import time as tm
 import pickle as pk
+# visualization
+from matplotlib import pyplot as plt
+from matplotlib import cm
+from matplotlib.ticker import LinearLocator, FormatStrFormatter
+from mpl_toolkits.mplot3d import Axes3D
+
 
 #%% --------------------------------------------------
 # constants
@@ -49,6 +56,7 @@ contract = build_contract_swpn(t_mat,t_tnr,X,omega)
 #%% --------------------------------------------------
 # sample market data
 # ----------------------------------------------------
+'''
 # bond
 r_flat = 0.01
 # assumed market observable
@@ -57,13 +65,37 @@ def PM(t,T,r=r_flat):
 # assumed G2++ calibrated
 def P(t,T,r=r_flat):
     return np.exp(-r*(T-t))
+'''
+# import zcb data
+df_zcb = pd.read_excel('zcb_usd.xlsx',index_col=0,header=0)
+key_lib3m = 'USD#LIBOR3M_Curve'
+key_sofr  = 'USD#SOFR_Curve'
+# generate instantaneous forward rates
+numer = (df_zcb/df_zcb.shift(-1)-1.0)
+denom = df_zcb.index[1:] - df_zcb.index[:-1]
+sr_fwd_lib3m = numer[key_lib3m].iloc[:-1]/denom
+sr_fwd_sofr  = numer[key_sofr].iloc[:-1]/denom
+# linear interpolated value
+def get_lininterp(sr,x):
+    return np.interp(x,sr.index,sr.values)
+# get zcb for libor3m at time s>=0.0 where t=0.0 for now
+def get_zcb_lib3m(s,t=0.0):
+    return get_lininterp(df_zcb[key_lib3m],s)/get_lininterp(df_zcb[key_lib3m],t)
+# get zcb for sofr at time s>=0.0 where t=0.0 for now
+def get_zcb_sofr(s,t=0.0):
+    return get_lininterp(df_zcb[key_sofr],s)/get_lininterp(df_zcb[key_sofr],t)
+# generate time grids list
+def time_grids(t1,t2,freq=4):
+    num_grid = int(t2 * freq) + 1
+    ts = np.linspace(t1, t1+t2, num=num_grid)
+    return ts
 # swap rate
-def swap_rate(ts,t=0.0):
+def swap_rate_ts(ts,t=0.0):
     t_stt = ts[0]
     t_end = ts[-1]
     taus = [t2 - t1 for t1, t2 in zip(ts[:-1], ts[1:])]
-    denom = np.sum([taus[i]*P(t,ts[i+1]) for i in range(len(taus))])
-    numer = P(t,t_stt) - P(t,t_end)
+    denom = np.sum([taus[i]*get_zcb_lib3m(ts[i+1],t) for i in range(len(taus))])
+    numer = get_zcb_lib3m(t_stt,t) - get_zcb_lib3m(t_end,t)
     return numer/denom
 
 #%% ##################################################
@@ -103,18 +135,11 @@ def V_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho):
     trm2 = sigma2**2/alpha2**2 * (T-t + 2.0/alpha2*np.exp(-alpha2*(T-t)) -0.5/alpha2*np.exp(-2*alpha2*(T-t)) - 1.5/alpha2)
     trm3 = 2.0*rho*sigma1*sigma2/alpha1/alpha2 * (T-t + (np.exp(-alpha1*(T-t))-1.0)/alpha1 + (np.exp(-alpha2*(T-t))-1.0)/alpha2 - (np.exp(-(alpha1+alpha2)*(T-t))-1.0)/(alpha1+alpha2))
     return trm1 + trm2 + trm3
-    # f1 = lambda x: (1.0-np.exp(-alpha1*(T-x)))**2
-    # trm1 = sigma1**2/alpha1**2 * itg.quad(f1,t,T)[0] # discard error
-    # f2 = lambda x: (1.0-np.exp(-alpha2*(T-x)))**2
-    # trm2 = sigma2**2/alpha2**2 * itg.quad(f2,t,T)[0] # discard error
-    # f3 = lambda x: (1.0-np.exp(-alpha1*(T-x))) * (1.0-np.exp(-alpha2*(T-x)))
-    # trm3 = 2*sigma1*sigma2/alpha1/alpha2 * itg.quad(f3,t,T)[0] # discard error
-    # return trm1 + trm2 + trm3
 # Brigo & Mercurio (4.15)
 def A_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho):
-    return PM(0,T)/PM(0,t)*np.exp(0.5*(V_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho)\
-                                    - V_g2pp(0,T,alpha1,alpha2,sigma1,sigma2,rho)\
-                                    + V_g2pp(0,t,alpha1,alpha2,sigma1,sigma2,rho)))
+    return get_zcb_lib3m(T,0.0)/get_zcb_lib3m(t,0.0)*np.exp(0.5*(V_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho)\
+                                                            - V_g2pp(0,T,alpha1,alpha2,sigma1,sigma2,rho)\
+                                                            + V_g2pp(0,t,alpha1,alpha2,sigma1,sigma2,rho)))
 # Brigo & Mercurio (4.15)
 def B_g2pp(z,t,T):
     return (1.0-np.exp(-z*(T-t)))/z
@@ -178,12 +203,12 @@ def swpn_integrand_g2pp(x,params,contract):
     trm2 = norm.cdf(-omega*h1)
     trm3 = np.sum([lambs[i]*np.exp(kappas[i])*norm.cdf(-omega*h2s[i]) for i in range(num_grid-1)])
     return trm1 * (trm2 - trm3)
-
+# swaption price
 def swpn_price_g2pp(params,contract):
     ts = contract['grids']
     omega = contract['side']
     integral = itg.quad(swpn_integrand_g2pp,lwr_itg,upr_itg,args=(params,contract))[0] # discard error
-    return integral * omega * P(0, ts[0])
+    return integral * omega * get_zcb_lib3m(ts[0],0.0)
 
 
 #%% --------------------------------------------------
@@ -196,7 +221,7 @@ omega_test = 1
 # test preparation
 num_grid_test = int(t_tnr_test * 4) + 1
 ts_test = np.linspace(t_mat_test, t_mat_test+t_tnr_test, num=num_grid_test)
-X_test = swap_rate(ts_test)
+X_test = swap_rate_ts(ts_test)
 cont_test = build_contract_swpn(t_mat_test,t_tnr_test,X_test,omega_test)
 # calculation
 price_test = swpn_price_g2pp(params_init,cont_test)
@@ -223,8 +248,13 @@ def black(S,K,T,sigma,omega):
 # swaption by log-normal implied vol
 def vol_to_price_black(S,K,sigma,omega,ts):
     tau = [t2 - t1 for t1, t2 in zip(ts[:-1], ts[1:])]
-    ann = np.sum([tau[i] * P(0.0, ts[i+1]) for i in range(len(tau))])
+    ann = np.sum([tau[i] * get_zcb_lib3m(ts[i+1],0.0) for i in range(len(tau))])
     return black(S,K,ts[0],sigma,omega) * ann
+# log-normal implied vol by swaption
+def price_to_vol_black(price,S,K,omega,ts,init_iv=0.01):
+    err = lambda sigma: price - vol_to_price_black(S,K,sigma,omega,ts)
+    iv = opt.root(err,init_iv,method='hybr').x[0]
+    return iv
 # bachelier model
 def bachelier(S,K,T,sigma,omega):
     d1 = (S-K)/sigma/np.sqrt(T)
@@ -232,8 +262,13 @@ def bachelier(S,K,T,sigma,omega):
 # swaption by normal implied vol
 def vol_to_price_normal(S,K,sigma,omega,ts):
     tau = [t2 - t1 for t1, t2 in zip(ts[:-1], ts[1:])]
-    ann = np.sum([tau[i] * P(0.0, ts[i+1]) for i in range(len(tau))])
+    ann = np.sum([tau[i] * get_zcb_lib3m(ts[i+1],0.0) for i in range(len(tau))])
     return bachelier(S,K,ts[0],sigma,omega) * ann
+# normal implied vol by swaption
+def price_to_vol_normal(price,S,K,omega,ts,init_iv=0.01):
+    err = lambda sigma: price - vol_to_price_normal(S,K,sigma,omega,ts)
+    iv = opt.root(err,init_iv,method='hybr').x[0]
+    return iv
 
 #%% --------------------------------------------------
 # import sample data
@@ -243,19 +278,20 @@ df_vols = pd.read_excel(filename,sheet_name='vols_normal',index_col=0)
 df_wgts = pd.read_excel(filename,sheet_name='weights_normal',index_col=0)
 
 # generating data
-lst_data = []
+lst_data_opt = []
+lst_data_all = []
 for idx in df_vols.index:
     for col in df_vols.columns:
+        lst_data_all.append([float(idx),float(col),df_vols[col][idx]/10000])
         if df_wgts[col][idx] > 0:
-            lst_data.append([float(idx),float(col),df_vols[col][idx]/10000])
-# generate contract list
-lst_contracts = []
-for i in range(len(lst_data)):
-    mem = lst_data[i]
+            lst_data_opt.append([float(idx),float(col),df_vols[col][idx]/10000])
+# generate contract list for optimization
+lst_contracts_opt = []
+for i in range(len(lst_data_opt)):
+    mem = lst_data_opt[i]
     # this contract
-    num_grid = int(mem[1] * 4) + 1
-    ts = np.linspace(mem[0], mem[0]+mem[1], num=num_grid)
-    swp_atm = swap_rate(ts)
+    ts = time_grids(mem[0],mem[1])
+    swp_atm = swap_rate_ts(ts)
     omega = 1
     # swaption price
     price = vol_to_price_normal(swp_atm,swp_atm,mem[2],omega,ts)
@@ -264,7 +300,23 @@ for i in range(len(lst_data)):
                 'strike' : swp_atm,
                 'side'   : omega,
                 'price'  : price}
-    lst_contracts.append(contract)
+    lst_contracts_opt.append(contract)
+# generate contract list all
+lst_contracts_all = []
+for i in range(len(lst_data_all)):
+    mem = lst_data_all[i]
+    # this contract
+    ts = time_grids(mem[0],mem[1])
+    swp_atm = swap_rate_ts(ts)
+    omega = 1
+    # swaption price
+    price = vol_to_price_normal(swp_atm,swp_atm,mem[2],omega,ts)
+    contract = {'tenor'  : (mem[0],mem[1]),
+                'grids'  : ts,
+                'strike' : swp_atm,
+                'side'   : omega,
+                'price'  : price}
+    lst_contracts_all.append(contract)
 
 #%% --------------------------------------------------
 # objective function
@@ -282,13 +334,13 @@ def opt_objective_g2pp(params, lst_contracts):
 # ----------------------------------------------------
 #rerr = opt_objective_g2pp(params,lst_contracts)
 if False:
-    for cont in lst_contracts:
+    for cont in lst_contracts_opt:
         price = swpn_price_g2pp(params,cont)
         print(cont['tenor'])
         print(price)
 
 #%% --------------------------------------------------
-# calibration
+# calibration of G2++ model
 # ----------------------------------------------------
 # optimizer
 # method: 'Powell', 'TNC', 'SLSQP'
@@ -296,15 +348,15 @@ algo = 'SLSQP'
 is_calib = False
 if is_calib:
     time_stt = tm.time()
-    #res = opt.minimize(opt_objective_g2pp,params_init,method='BFGS',args=(lst_contracts),bounds=lst_bounds)
-    # method = 'Powell', 'TNC', 'SLSQP'
-    res = opt.minimize(opt_objective_g2pp,params_init,method='algo',args=(lst_contracts),bounds=lst_bounds)
+    res = opt.minimize(opt_objective_g2pp,params_init,method='algo',args=(lst_contracts_opt),bounds=lst_bounds)
     time_end = tm.time()
     time_exe = time_end - time_stt
     print(time_exe/60.0,'[min]')
     pk.dump(res,open('res_calib_org.pkl','wb'))
 else:
     res = pk.load(open('res_calib_org.pkl','rb'))
+# store params
+params_new = list(res.x)
 
 #%% --------------------------------------------------
 # review results
@@ -325,14 +377,77 @@ fun: 0.004538905335817894
  success: True
        x: array([ 0.50217903,  0.12054291,  0.04085115,  0.01710676, -0.50568136])
 '''
-
-params_new = [0.50217903, 0.12054291, 0.04085115, 0.01710676, -0.50568136]
 for cont in lst_contracts:
     price = swpn_price_g2pp(params_new,cont)
     print('Tenor >> ', cont['tenor'])
     print('G2++ price   :', price)
     print('Market price :', cont['price'])
 
+#%% --------------------------------------------------
+# rooting full surface of model vols
+# ----------------------------------------------------
+def model_vols_surface(params,lst_contracts):
+    # preparation
+    set_idx = set()
+    set_col = set()
+    for cont in lst_contracts:
+        set_idx.add(cont['tenor'][0])
+        set_col.add(cont['tenor'][1])
+    lst_idx = list(set_idx)
+    lst_col = list(set_col)
+    lst_idx.sort()
+    lst_col.sort()
+    # build dataframe
+    df_vols_model = pd.DataFrame(index=lst_idx,columns=lst_col)
+    for cont in lst_contracts_all:
+        ts = cont['grids']
+        X = cont['strike']
+        omega = cont['side']
+        price = swpn_price_g2pp(params,cont)
+        vol = price_to_vol_normal(price,X,X,omega,ts)
+        df_vols_model[cont['tenor'][1]][cont['tenor'][0]] = vol*10000
+        print('Tenor >> ', cont['tenor'],'\t: Completed')
+    df_vols_model = df_vols_model.astype(float)
+    return df_vols_model
+'''
+df_vols_model = pd.DataFrame(index=df_vols.index,columns=df_vols.columns)
+for cont in lst_contracts_all:
+    ts = cont['grids']
+    X = cont['strike']
+    omega = cont['side']
+    price = swpn_price_g2pp(params_new,cont)
+    vol = price_to_vol_normal(price,X,X,omega,ts)
+    df_vols_model[cont['tenor'][1]][cont['tenor'][0]] = vol*10000
+    print('Tenor >> ', cont['tenor'],'\t: Completed')
+df_vols_model = df_vols_model.astype(float)
+'''
+
+#%% --------------------------------------------------
+# visualization of vols surface
+# ----------------------------------------------------
+title_fmt = 'Swaption Vols Surface: '
+def show_vols3d(df,label='Market'):
+    x = df.columns
+    y = df.index
+    x, y = np.meshgrid(x,y)
+    # figure
+    fig = plt.figure(figsize=(7,4))
+    ax = Axes3D(fig)
+    surf = ax.plot_surface(x,y,df.values,cmap=cm.jet)
+    fig.colorbar(surf)
+    plt.title(title_fmt+label)
+    plt.xlabel('Swap tenor')
+    plt.ylabel('Option maturity')
+    plt.show()
+
+#%% --------------------------------------------------
+# review results: vols surface
+# ----------------------------------------------------
+# calculate model vols
+df_vols_model = model_vols_surface(params_new,lst_contracts_all)
+# target
+show_vols3d(df_vols,'Market')
+show_vols3d(df_vols_model,'G2++')
 
 #%% ##################################################
 # vega calculation part
@@ -340,15 +455,15 @@ for cont in lst_contracts:
 #%% --------------------------------------------------
 # bump a grid iv & rebuild contracts for re-calibration
 # ----------------------------------------------------
-bump_shift = 0.0001 * 10.0 # 10bps jump for normal
+bump_unit = 10.0
+bump_shift = 0.0001 * bump_unit # 10bps jump for normal
 bump_grid  = (5.0, 5.0)
 
 lst_contracts_bump = []
-for i in range(len(lst_data)):
-    mem = lst_data[i]
+for i in range(len(lst_data_opt)):
+    mem = lst_data_opt[i]
     # this contract
-    num_grid = int(mem[1] * 4) + 1
-    ts = np.linspace(mem[0], mem[0]+mem[1], num=num_grid)
+    ts = time_grids(mem[0], mem[1])
     swp_atm = swap_rate(ts)
     omega = 1
     # bump
@@ -380,6 +495,8 @@ if is_calib:
     pk.dump(res,open('res_calib_bmp.pkl','wb'))
 else:
     res_bump = pk.load(open('res_calib_bmp.pkl','rb'))
+# store params
+params_new_bump = list(res_bump.x)
 
 #%% --------------------------------------------------
 # review results
@@ -400,14 +517,11 @@ fun: 0.0039910103974912904
  success: True
        x: array([ 0.50280901,  0.12069876,  0.04072832,  0.01732311, -0.50572715])
 '''
-
-params_new_bump = [0.50280901, 0.12069876, 0.04072832, 0.01732311, -0.50572715]
-for cont in lst_contracts_bump:
-    price = swpn_price_g2pp(params_new_bump,cont)
-    print('Tenor >> ', cont['tenor'])
-    print('G2++ price   :', price)
-    print('Market price :', cont['price'])
-
+# calculate model vols
+df_vols_bump = model_vols_surface(params_new_bump,lst_contracts_all)
+df_vols_vega = df_vols_bump - df_vols_model
+# visualization
+show_vols3d(df_vols_vega,str(int(bump_unit))+'bps vega at '+str(bump_grid))
 
 #%% ##################################################
 # Monte Carlo simulation
@@ -420,10 +534,8 @@ X = 0.0125
 omega = 1 # 1 for payer, -1 for receiver
 # irs contract generator
 def build_contract_irs(t_tnr,strike,omega):
-    num_grid_fixed = int(t_tnr * 2) + 1
-    num_grid_float = int(t_tnr * 4) + 1
-    ts_fixed = np.linspace(0.0, t_tnr, num=num_grid_fixed)
-    ts_float = np.linspace(0.0, t_tnr, num=num_grid_float)
+    ts_fixed = time_grids(0.0,t_tnr,freq=2)
+    ts_float = time_grids(0.0,t_tnr,freq=2)
     contract = {'grids_fixed':ts_fixed,'grids_float':ts_float,'strike':X,'side': omega}
     return contract
 # test trade
@@ -441,7 +553,7 @@ rho = params_new[4]
 # constants/sub params
 seed = 1234
 num_grid = 1000
-ts_pre  = np.linspace(0.0,life,num=num_grid+1)
+ts_pre = np.linspace(0.0,life,num=num_grid+1)
 # simulation grids (need to have irs contract first)
 ts_agg = list(set(ts_pre)|set(contract_irs['grids_fixed'])|set(contract_irs['grids_float']))
 ts_agg.sort()
@@ -449,7 +561,7 @@ ts_new = np.array(ts_agg)
 dts = ts_new[1:] - ts_new[:-1]
 
 #%% --------------------------------------------------
-# test G2++ simulated path
+# generate G2++ paths
 # ----------------------------------------------------
 # initialization
 np.random.seed(seed) # reset random seet for reproductivity
@@ -474,11 +586,15 @@ x2s = np.array(lst_x2s).T
 #%% --------------------------------------------------
 # test G2++ simulated path
 # ----------------------------------------------------
-plt.plot(ts_new,x1s[0,:])
-plt.plot(ts_new,x2s[1,:])
+'''
+id = 3
+plt.plot(ts_new,x1s[id,:])
+plt.plot(ts_new,x2s[id,:])
 plt.show()
-
-
-
+'''
 
 # %%
+
+
+
+
