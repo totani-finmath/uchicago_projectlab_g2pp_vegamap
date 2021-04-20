@@ -38,12 +38,13 @@ t_mat = 2.0
 t_tnr = 5.0
 X = 0.01
 omega = 1
-def build_contract(t_mat,t_tnr,strike,omega):
+def build_contract_swpn(t_mat,t_tnr,strike,omega):
+    # assuming frequencies are same for both legs
     num_grid = int(t_tnr * 4) + 1
     ts = np.linspace(t_mat, t_mat+t_tnr, num=num_grid)
     contract = {'grids':ts,'strike':X,'side': omega}
     return contract
-contract = build_contract(t_mat,t_tnr,X,omega)
+contract = build_contract_swpn(t_mat,t_tnr,X,omega)
 
 #%% --------------------------------------------------
 # sample market data
@@ -196,7 +197,7 @@ omega_test = 1
 num_grid_test = int(t_tnr_test * 4) + 1
 ts_test = np.linspace(t_mat_test, t_mat_test+t_tnr_test, num=num_grid_test)
 X_test = swap_rate(ts_test)
-cont_test = build_contract(t_mat_test,t_tnr_test,X_test,omega_test)
+cont_test = build_contract_swpn(t_mat_test,t_tnr_test,X_test,omega_test)
 # calculation
 price_test = swpn_price_g2pp(params_init,cont_test)
 print('test price',t_mat_test,'x',t_tnr_test,':',price_test)
@@ -264,7 +265,6 @@ for i in range(len(lst_data)):
                 'side'   : omega,
                 'price'  : price}
     lst_contracts.append(contract)
-
 
 #%% --------------------------------------------------
 # objective function
@@ -407,6 +407,78 @@ for cont in lst_contracts_bump:
     print('Tenor >> ', cont['tenor'])
     print('G2++ price   :', price)
     print('Market price :', cont['price'])
+
+
+#%% ##################################################
+# Monte Carlo simulation
+# ####################################################
+#%% --------------------------------------------------
+# build irs portfolio
+# ----------------------------------------------------
+t_tnr = 10.0
+X = 0.0125
+omega = 1 # 1 for payer, -1 for receiver
+# irs contract generator
+def build_contract_irs(t_tnr,strike,omega):
+    num_grid_fixed = int(t_tnr * 2) + 1
+    num_grid_float = int(t_tnr * 4) + 1
+    ts_fixed = np.linspace(0.0, t_tnr, num=num_grid_fixed)
+    ts_float = np.linspace(0.0, t_tnr, num=num_grid_float)
+    contract = {'grids_fixed':ts_fixed,'grids_float':ts_float,'strike':X,'side': omega}
+    return contract
+# test trade
+contract_irs = build_contract_irs(t_tnr,X,omega)
+
+#%% --------------------------------------------------
+# prepare Monte Carlo simulation
+# ----------------------------------------------------
+# parameters
+num_mc = 50000
+life = 10.0
+alpha1, sigma1 = params_new[0], params_new[2]
+alpha2, sigma2 = params_new[1], params_new[3]
+rho = params_new[4]
+# constants/sub params
+seed = 1234
+num_grid = 1000
+ts_pre  = np.linspace(0.0,life,num=num_grid+1)
+# simulation grids (need to have irs contract first)
+ts_agg = list(set(ts_pre)|set(contract_irs['grids_fixed'])|set(contract_irs['grids_float']))
+ts_agg.sort()
+ts_new = np.array(ts_agg)
+dts = ts_new[1:] - ts_new[:-1]
+
+#%% --------------------------------------------------
+# test G2++ simulated path
+# ----------------------------------------------------
+# initialization
+np.random.seed(seed) # reset random seet for reproductivity
+x1 = np.array([0.0 for x in range(num_mc)])
+x2 = np.array([0.0 for x in range(num_mc)])
+lst_x1s, lst_x2s = [], []
+lst_x1s.append(x1)
+lst_x2s.append(x2)
+# generate G2++ paths
+for dt in dts:
+    # generate brownian motions
+    dw1 = np.random.normal(0.0,np.sqrt(dt),size=num_mc)
+    dw2 = rho*dw1 + np.sqrt(1.0-rho**2)*np.random.normal(0.0,np.sqrt(dt),size=num_mc)
+    x1 = x1 + (-alpha1*x1*dt + sigma1*dw1)
+    x2 = x2 + (-alpha2*x2*dt + sigma2*dw2)
+    lst_x1s.append(x1)
+    lst_x2s.append(x2)
+# srote into np.array
+x1s = np.array(lst_x1s).T
+x2s = np.array(lst_x2s).T
+
+#%% --------------------------------------------------
+# test G2++ simulated path
+# ----------------------------------------------------
+plt.plot(ts_new,x1s[0,:])
+plt.plot(ts_new,x2s[1,:])
+plt.show()
+
+
 
 
 # %%
