@@ -377,16 +377,17 @@ method='SLSQP'
 upr_itg = np.inf
 lwr_itg = -np.inf
 params_init = [0.5, 0.1, 0.05, 0.02, -0.5]
-160.80168081124623 [min]
-fun: 0.004538905335817894
-     jac: array([-0.00668856,  0.10718564,  0.07743483, -0.79550558, -0.00229977])
+174.80168081124623 [min]
+
+     fun: 0.007100906657011682
+     jac: array([-0.00368487,  0.00014465,  0.05815335,  0.05066651,  0.00305027])
  message: 'Optimization terminated successfully'
-    nfev: 139
-     nit: 16
-    njev: 16
+    nfev: 80
+     nit: 10
+    njev: 10
   status: 0
  success: True
-       x: array([ 0.50217903,  0.12054291,  0.04085115,  0.01710676, -0.50568136])
+       x: array([ 0.50048295,  0.0948413 ,  0.04117085,  0.01517368, -0.50044063])
 '''
 for cont in lst_contracts_opt:
     price = swpn_price_g2pp(params_new,cont)
@@ -420,18 +421,6 @@ def model_vols_surface(params,lst_contracts):
         print('Tenor >> ', cont['tenor'],'\t: Completed')
     df_vols_model = df_vols_model.astype(float)
     return df_vols_model
-'''
-df_vols_model = pd.DataFrame(index=df_vols.index,columns=df_vols.columns)
-for cont in lst_contracts_all:
-    ts = cont['grids']
-    X = cont['strike']
-    omega = cont['side']
-    price = swpn_price_g2pp(params_new,cont)
-    vol = price_to_vol_normal(price,X,X,omega,ts)
-    df_vols_model[cont['tenor'][1]][cont['tenor'][0]] = vol*10000
-    print('Tenor >> ', cont['tenor'],'\t: Completed')
-df_vols_model = df_vols_model.astype(float)
-'''
 
 #%% --------------------------------------------------
 # visualization of vols surface
@@ -504,7 +493,7 @@ if is_calib:
     time_end = tm.time()
     time_exe = time_end - time_stt
     print(time_exe/60.0,'[min]')
-    pk.dump(res,open('res_calib_bmp.pkl','wb'))
+    pk.dump(res_bump,open('res_calib_bmp.pkl','wb'))
 else:
     res_bump = pk.load(open('res_calib_bmp.pkl','rb'))
 # store params
@@ -518,16 +507,16 @@ method='SLSQP'
 upr_itg = np.inf
 lwr_itg = -np.inf
 params_init = [0.5, 0.1, 0.05, 0.02, -0.5]
-154.12170910040538 [min]
-fun: 0.0039910103974912904
-     jac: array([-0.00629278,  0.11896654,  0.07182155, -0.92014241, -0.00388288])
+130.12170910040538 [min]
+     fun: 0.007082872777263247
+     jac: array([-0.00337061,  0.0002195 ,  0.05304257,  0.04962065,  0.00279054])
  message: 'Optimization terminated successfully'
-    nfev: 129
-     nit: 15
-    njev: 15
+    nfev: 96
+     nit: 12
+    njev: 12
   status: 0
  success: True
-       x: array([ 0.50280901,  0.12069876,  0.04072832,  0.01732311, -0.50572715])
+       x: array([ 0.50024495,  0.09375906,  0.04125617,  0.01506021, -0.50010815])
 '''
 if False:
     # calculate model vols
