@@ -16,7 +16,6 @@ from matplotlib import cm
 from matplotlib.ticker import LinearLocator, FormatStrFormatter
 from mpl_toolkits.mplot3d import Axes3D
 
-
 #%% --------------------------------------------------
 # constants
 # ----------------------------------------------------
@@ -56,16 +55,6 @@ contract = build_contract_swpn(t_mat,t_tnr,X,omega)
 #%% --------------------------------------------------
 # sample market data
 # ----------------------------------------------------
-'''
-# bond
-r_flat = 0.01
-# assumed market observable
-def PM(t,T,r=r_flat):
-    return np.exp(-r*(T-t))
-# assumed G2++ calibrated
-def P(t,T,r=r_flat):
-    return np.exp(-r*(T-t))
-'''
 # import zcb data
 df_zcb = pd.read_excel('zcb_usd.xlsx',index_col=0,header=0)
 key_lib3m = 'USD#LIBOR3M_Curve'
@@ -237,7 +226,7 @@ def get_fwd_g2pp(t1,t2,params,x1t,x2t):
 # test: pricing
 # ----------------------------------------------------
 # test setting
-t_mat_test = 0.5
+t_mat_test = 1.0
 t_tnr_test = 3.0
 omega_test = 1
 # test preparation
@@ -274,7 +263,7 @@ def vol_to_price_black(S,K,sigma,omega,ts):
     return black(S,K,ts[0],sigma,omega) * ann
 # log-normal implied vol by swaption
 def price_to_vol_black(price,S,K,omega,ts,init_iv=0.01):
-    err = lambda sigma: price - vol_to_price_black(S,K,sigma,omega,ts)
+    err = lambda sigma: (price - vol_to_price_black(S,K,sigma,omega,ts))/price
     iv = opt.root(err,init_iv,method='hybr').x[0]
     return iv
 # bachelier model
@@ -288,7 +277,7 @@ def vol_to_price_normal(S,K,sigma,omega,ts):
     return bachelier(S,K,ts[0],sigma,omega) * ann
 # normal implied vol by swaption
 def price_to_vol_normal(price,S,K,omega,ts,init_iv=0.01):
-    err = lambda sigma: price - vol_to_price_normal(S,K,sigma,omega,ts)
+    err = lambda sigma: (price - vol_to_price_normal(S,K,sigma,omega,ts))/price
     iv = opt.root(err,init_iv,method='hybr').x[0]
     return iv
 
@@ -367,10 +356,10 @@ if False:
 # optimizer
 # method: 'Powell', 'TNC', 'SLSQP'
 algo = 'SLSQP'
-is_calib = True
+is_calib = False
 if is_calib:
     time_stt = tm.time()
-    res = opt.minimize(opt_objective_g2pp,params_init,method='algo',args=(lst_contracts_opt),bounds=lst_bounds)
+    res = opt.minimize(opt_objective_g2pp,params_init,method=algo,args=(lst_contracts_opt),bounds=lst_bounds)
     time_end = tm.time()
     time_exe = time_end - time_stt
     print(time_exe/60.0,'[min]')
@@ -399,7 +388,7 @@ fun: 0.004538905335817894
  success: True
        x: array([ 0.50217903,  0.12054291,  0.04085115,  0.01710676, -0.50568136])
 '''
-for cont in lst_contracts:
+for cont in lst_contracts_opt:
     price = swpn_price_g2pp(params_new,cont)
     print('Tenor >> ', cont['tenor'])
     print('G2++ price   :', price)
@@ -465,11 +454,12 @@ def show_vols3d(df,label='Market'):
 #%% --------------------------------------------------
 # review results: vols surface
 # ----------------------------------------------------
-# calculate model vols
-df_vols_model = model_vols_surface(params_new,lst_contracts_all)
-# target
-show_vols3d(df_vols,'Market')
-show_vols3d(df_vols_model,'G2++')
+if False:
+    # calculate model vols
+    df_vols_model = model_vols_surface(params_new,lst_contracts_all)
+    # target
+    show_vols3d(df_vols,'Market')
+    show_vols3d(df_vols_model,'G2++')
 
 #%% ##################################################
 # vega calculation part
@@ -479,7 +469,7 @@ show_vols3d(df_vols_model,'G2++')
 # ----------------------------------------------------
 bump_unit = 10.0
 bump_shift = 0.0001 * bump_unit # 10bps jump for normal
-bump_grid  = (5.0, 5.0)
+bump_grid  = (5.0, 2.0)
 
 lst_contracts_bump = []
 for i in range(len(lst_data_opt)):
@@ -506,7 +496,7 @@ for i in range(len(lst_data_opt)):
 # re-calibration for bumped data
 # ----------------------------------------------------
 # optimizer
-is_calib = True
+is_calib = False
 if is_calib:
     time_stt = tm.time()
     # method = 'Powell', 'TNC', 'SLSQP'
@@ -539,11 +529,12 @@ fun: 0.0039910103974912904
  success: True
        x: array([ 0.50280901,  0.12069876,  0.04072832,  0.01732311, -0.50572715])
 '''
-# calculate model vols
-df_vols_bump = model_vols_surface(params_new_bump,lst_contracts_all)
-df_vols_vega = df_vols_bump - df_vols_model
-# visualization
-show_vols3d(df_vols_vega,str(int(bump_unit))+'bps vega at '+str(bump_grid))
+if False:
+    # calculate model vols
+    df_vols_bump = model_vols_surface(params_new_bump,lst_contracts_all)
+    df_vols_vega = df_vols_bump - df_vols_model
+    # visualization
+    show_vols3d(df_vols_vega,str(int(bump_unit))+'bps vega at '+str(bump_grid))
 
 #%% ##################################################
 # Monte Carlo simulation
@@ -551,8 +542,8 @@ show_vols3d(df_vols_vega,str(int(bump_unit))+'bps vega at '+str(bump_grid))
 #%% --------------------------------------------------
 # build irs portfolio
 # ----------------------------------------------------
-t_tnr = 7.0
-X = 0.0125
+t_tnr = 10.0
+X = 0.0155 #0.0125 for 7y, 0.0155 for 10y
 omega = 1 # 1 for payer, -1 for receiver
 # irs contract generator
 def build_contract_irs(t_tnr,strike,omega):
@@ -595,13 +586,13 @@ def monte_carlo_g2pp(num_mc,horizon,params_mc,contract,num_grid=1000,seed=1234):
         lst_x1s.append(x1)
         lst_x2s.append(x2)
     # srote into np.array
-    return np.array(lst_x1s).T, np.array(lst_x2s).T
+    return np.array(lst_x1s).T, np.array(lst_x2s).T, ts_new
 # settings
 num_mc = 50000
 horizon = 10.0
 # run simulation
-x1s, x2s = monte_carlo_g2pp(num_mc,horizon,params_new,contract_irs)
-x1s_bump, x2s_bump = monte_carlo_g2pp(num_mc,horizon,params_new_bump,contract_irs)
+x1s, x2s, ts_new = monte_carlo_g2pp(num_mc,horizon,params_new,contract_irs)
+x1s_bump, x2s_bump, ts_new_bump = monte_carlo_g2pp(num_mc,horizon,params_new_bump,contract_irs)
 
 #%% --------------------------------------------------
 # irs pricer
@@ -666,13 +657,26 @@ epe_mc = res_mc * (res_mc>0.0)
 ene_mc = res_mc * (res_mc<0.0)
 
 #%% --------------------------------------------------
+# exposure sample
+# ----------------------------------------------------
+plt.figure()
+#plt.plot(ts_new[:-1],res_mc[11,:],label='Sample Exposure')
+for i in range(7):
+    plt.plot(ts_new[:-1],res_mc[i,:],label='Exposure '+str(i+1))
+plt.title('Exposure profile samples for Payers IRS '+str(int(t_tnr))+'yrs')
+plt.xlabel('Time')
+plt.ylabel('Exposure')
+plt.legend()
+plt.show()
+
+#%% --------------------------------------------------
 # exposure plot
 # ----------------------------------------------------
 plt.figure()
 plt.plot(ts_new[:-1],epe_mc.mean(axis=0),label='EPE')
 plt.plot(ts_new[:-1],ene_mc.mean(axis=0),label='ENE')
 plt.plot(ts_new[:-1],res_mc.mean(axis=0),label='EE(Mean)')
-plt.title('Exposure profile for IRS '+str(int(t_tnr))+'yrs')
+plt.title('Exposure profile for Payers IRS '+str(int(t_tnr))+'yrs')
 plt.xlabel('Time')
 plt.ylabel('Exposure')
 plt.legend()
