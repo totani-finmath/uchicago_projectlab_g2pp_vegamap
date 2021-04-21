@@ -129,7 +129,7 @@ def ci_g2pp(i,X,tau): # 1<=i<=n
 #%% --------------------------------------------------
 # functions: bond pricings
 # ----------------------------------------------------
-# Brigo & Mercurio (4.10) (or primitively (4.14))
+# Brigo & Mercurio (4.10)
 def V_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho):
     trm1 = sigma1**2/alpha1**2 * (T-t + 2.0/alpha1*np.exp(-alpha1*(T-t)) -0.5/alpha1*np.exp(-2*alpha1*(T-t)) - 1.5/alpha1)
     trm2 = sigma2**2/alpha2**2 * (T-t + 2.0/alpha2*np.exp(-alpha2*(T-t)) -0.5/alpha2*np.exp(-2*alpha2*(T-t)) - 1.5/alpha2)
@@ -203,20 +203,42 @@ def swpn_integrand_g2pp(x,params,contract):
     trm2 = norm.cdf(-omega*h1)
     trm3 = np.sum([lambs[i]*np.exp(kappas[i])*norm.cdf(-omega*h2s[i]) for i in range(num_grid-1)])
     return trm1 * (trm2 - trm3)
-# swaption price
+# swaption price, Brigo & Mercurio (4.31)
 def swpn_price_g2pp(params,contract):
     ts = contract['grids']
     omega = contract['side']
     integral = itg.quad(swpn_integrand_g2pp,lwr_itg,upr_itg,args=(params,contract))[0] # discard error
     return integral * omega * get_zcb_lib3m(ts[0],0.0)
 
+#%% --------------------------------------------------
+# G2++ bond price given Gaussian factors
+# ----------------------------------------------------
+# Brigo & Mercurio (4.14)
+def get_zcb_g2pp(t,T,params,x1t,x2t):
+    alpha1, sigma1 = params[0], params[2]
+    alpha2, sigma2 = params[1], params[3]
+    rho = params[4]
+    # Vs
+    v1 = V_g2pp(t,T,alpha1,alpha2,sigma1,sigma2,rho)
+    v2 = V_g2pp(0,T,alpha1,alpha2,sigma1,sigma2,rho)
+    v3 = V_g2pp(0,t,alpha1,alpha2,sigma1,sigma2,rho)
+    # coef factors
+    b1 = B_g2pp(alpha1,t,T)
+    b2 = B_g2pp(alpha2,t,T)
+    # aggregation
+    At = 0.5*(v1 - v2 + v3) - b1*x1t - b2*x2t
+    return get_zcb_lib3m(T)/get_zcb_lib3m(t) * np.exp(At)
+def get_fwd_g2pp(t1,t2,params,x1t,x2t):
+    tau = t2 - t1
+    fwd = (get_zcb_g2pp(0.0,t1,params,x1t,x2t)/get_zcb_g2pp(0.0,t2,params,x1t,x2t) - 1.0)/tau
+    return fwd
 
 #%% --------------------------------------------------
 # test: pricing
 # ----------------------------------------------------
 # test setting
-t_mat_test = 1.0
-t_tnr_test = 4.0
+t_mat_test = 0.5
+t_tnr_test = 3.0
 omega_test = 1
 # test preparation
 num_grid_test = int(t_tnr_test * 4) + 1
@@ -345,7 +367,7 @@ if False:
 # optimizer
 # method: 'Powell', 'TNC', 'SLSQP'
 algo = 'SLSQP'
-is_calib = False
+is_calib = True
 if is_calib:
     time_stt = tm.time()
     res = opt.minimize(opt_objective_g2pp,params_init,method='algo',args=(lst_contracts_opt),bounds=lst_bounds)
@@ -464,7 +486,7 @@ for i in range(len(lst_data_opt)):
     mem = lst_data_opt[i]
     # this contract
     ts = time_grids(mem[0], mem[1])
-    swp_atm = swap_rate(ts)
+    swp_atm = swap_rate_ts(ts)
     omega = 1
     # bump
     if mem[0] == bump_grid[0] and mem[1] == bump_grid[1]:
@@ -484,7 +506,7 @@ for i in range(len(lst_data_opt)):
 # re-calibration for bumped data
 # ----------------------------------------------------
 # optimizer
-is_calib = False
+is_calib = True
 if is_calib:
     time_stt = tm.time()
     # method = 'Powell', 'TNC', 'SLSQP'
@@ -529,72 +551,165 @@ show_vols3d(df_vols_vega,str(int(bump_unit))+'bps vega at '+str(bump_grid))
 #%% --------------------------------------------------
 # build irs portfolio
 # ----------------------------------------------------
-t_tnr = 10.0
+t_tnr = 7.0
 X = 0.0125
 omega = 1 # 1 for payer, -1 for receiver
 # irs contract generator
 def build_contract_irs(t_tnr,strike,omega):
-    ts_fixed = time_grids(0.0,t_tnr,freq=2)
-    ts_float = time_grids(0.0,t_tnr,freq=2)
+    ts_fixed = time_grids(0.0,t_tnr,freq=2) # semi-annually
+    ts_float = time_grids(0.0,t_tnr,freq=4) # quarterly
     contract = {'grids_fixed':ts_fixed,'grids_float':ts_float,'strike':X,'side': omega}
     return contract
 # test trade
 contract_irs = build_contract_irs(t_tnr,X,omega)
 
 #%% --------------------------------------------------
-# prepare Monte Carlo simulation
+# Monte Carlo simulation
 # ----------------------------------------------------
-# parameters
-num_mc = 50000
-life = 10.0
-alpha1, sigma1 = params_new[0], params_new[2]
-alpha2, sigma2 = params_new[1], params_new[3]
-rho = params_new[4]
-# constants/sub params
-seed = 1234
-num_grid = 1000
-ts_pre = np.linspace(0.0,life,num=num_grid+1)
-# simulation grids (need to have irs contract first)
-ts_agg = list(set(ts_pre)|set(contract_irs['grids_fixed'])|set(contract_irs['grids_float']))
-ts_agg.sort()
-ts_new = np.array(ts_agg)
-dts = ts_new[1:] - ts_new[:-1]
-
-#%% --------------------------------------------------
-# generate G2++ paths
-# ----------------------------------------------------
-# initialization
-np.random.seed(seed) # reset random seet for reproductivity
-x1 = np.array([0.0 for x in range(num_mc)])
-x2 = np.array([0.0 for x in range(num_mc)])
-lst_x1s, lst_x2s = [], []
-lst_x1s.append(x1)
-lst_x2s.append(x2)
-# generate G2++ paths
-for dt in dts:
-    # generate brownian motions
-    dw1 = np.random.normal(0.0,np.sqrt(dt),size=num_mc)
-    dw2 = rho*dw1 + np.sqrt(1.0-rho**2)*np.random.normal(0.0,np.sqrt(dt),size=num_mc)
-    x1 = x1 + (-alpha1*x1*dt + sigma1*dw1)
-    x2 = x2 + (-alpha2*x2*dt + sigma2*dw2)
+# two factor simulator
+def monte_carlo_g2pp(num_mc,horizon,params_mc,contract,num_grid=1000,seed=1234):
+    ts_pre = np.linspace(0.0,horizon,num=num_grid+1)
+    # simulation grids (need to have irs contract first)
+    ts_agg = list(set(ts_pre)|set(contract['grids_fixed'])|set(contract['grids_float']))
+    ts_agg.sort()
+    ts_new = np.array(ts_agg)
+    dts = ts_new[1:] - ts_new[:-1]
+    # G2++ parameters
+    alpha1, sigma1 = params_mc[0], params_mc[2]
+    alpha2, sigma2 = params_mc[1], params_mc[3]
+    rho = params_mc[4]
+    # initialization
+    np.random.seed(seed) # reset random seet for reproductivity
+    x1 = np.array([0.0 for x in range(num_mc)])
+    x2 = np.array([0.0 for x in range(num_mc)])
+    lst_x1s, lst_x2s = [], []
     lst_x1s.append(x1)
     lst_x2s.append(x2)
-# srote into np.array
-x1s = np.array(lst_x1s).T
-x2s = np.array(lst_x2s).T
+    # generate G2++ paths
+    for dt in dts:
+        # generate brownian motions
+        dw1 = np.random.normal(0.0,np.sqrt(dt),size=num_mc)
+        dw2 = rho*dw1 + np.sqrt(1.0-rho**2)*np.random.normal(0.0,np.sqrt(dt),size=num_mc)
+        x1 = x1 + (-alpha1*x1*dt + sigma1*dw1)
+        x2 = x2 + (-alpha2*x2*dt + sigma2*dw2)
+        lst_x1s.append(x1)
+        lst_x2s.append(x2)
+    # srote into np.array
+    return np.array(lst_x1s).T, np.array(lst_x2s).T
+# settings
+num_mc = 50000
+horizon = 10.0
+# run simulation
+x1s, x2s = monte_carlo_g2pp(num_mc,horizon,params_new,contract_irs)
+x1s_bump, x2s_bump = monte_carlo_g2pp(num_mc,horizon,params_new_bump,contract_irs)
 
 #%% --------------------------------------------------
-# test G2++ simulated path
+# irs pricer
 # ----------------------------------------------------
-'''
-id = 3
-plt.plot(ts_new,x1s[id,:])
-plt.plot(ts_new,x2s[id,:])
+def pv_irs_g2pp(s,cont_irs,params,x1,x2,x1last,x2last):
+    ts_fixed = cont_irs['grids_fixed']
+    ts_float = cont_irs['grids_float']
+    X, omega = cont_irs['strike'], cont_irs['side']
+    try:
+        num_mc = x1.shape[0] # assuming columns vector
+    except:
+        num_mc = 1
+    # error handle
+    if np.max(ts_float)<=s or np.max(ts_fixed)<=s:
+        return np.zeros(num_mc)
+    # new grids
+    ts_fixed_s, ts_float_s = [], []
+    is_fixed1st = True
+    for i in range(len(ts_fixed)):
+        if ts_fixed[i]-s>0.0 and is_fixed1st:
+            ts_fixed_s.append(ts_fixed[i-1]-s)
+            is_fixed1st = False
+        if ts_fixed[i]-s>0.0:
+            ts_fixed_s.append(ts_fixed[i]-s)
+    is_float1st = True
+    for i in range(len(ts_float)):
+        if ts_float[i]-s>0.0 and is_float1st:
+            ts_float_s.append(ts_float[i-1]-s)
+            is_float1st = False
+        if ts_float[i]-s>0.0:
+            ts_float_s.append(ts_float[i]-s)
+    tau_fixed_s = [ts_fixed_s[i+1] - ts_fixed_s[i] for i in range(len(ts_fixed_s)-1)]
+    tau_float_s = [ts_float_s[i+1] - ts_float_s[i] for i in range(len(ts_float_s)-1)]
+    # fixed leg pv
+    pv_fixed = np.array([tau_fixed_s[i] * get_zcb_g2pp(s,s+ts_fixed_s[i+1],params,x1,x2) * X \
+                            for i in range(len(tau_fixed_s))]).T.sum(axis=1)
+    # float leg pv
+    # fixed 1st CF
+    pv_float = np.array(tau_float_s[0] * get_zcb_g2pp(s,s+ts_float_s[1],params,x1_last,x2_last) \
+                        * get_fwd_g2pp(ts_float_s[0],ts_float_s[1],params,x1_last,x2_last)).T 
+    # float CF after 1st CF
+    if len(tau_float_s) > 1: # if still floating
+        pv_float += np.array([tau_float_s[i] * get_zcb_g2pp(s,s+ts_float_s[i+1],params,x1,x2) \
+                             * get_fwd_g2pp(ts_float_s[i],ts_float_s[i+1],params,x1,x2) \
+                             for i in range(1,len(tau_float_s))]).T.sum(axis=1)
+    return omega * (pv_float - pv_fixed)
+
+#%% --------------------------------------------------
+# exposure calculation
+# ----------------------------------------------------
+num_grid_new = len(ts_new)
+lst_res_mc = []
+# exposure simulation
+xt_last, yt_last = x1s[:,0], x2s[:,0]
+for i in range(num_grid_new-1): # up to just before last grid
+    if np.min(np.abs(ts_new[i]-contract_irs['grids_float'])) < 1.0e-6: # fixing grid for float
+        x1_last, x2_last = x1s[:,i], x2s[:,i]
+    lst_res_mc.append(pv_irs_g2pp(ts_new[i],contract_irs,params_new,x1s[:,i],x2s[:,i],x1_last,x2_last))
+# result aggregation
+res_mc = np.stack(lst_res_mc,axis=0).T
+epe_mc = res_mc * (res_mc>0.0)
+ene_mc = res_mc * (res_mc<0.0)
+
+#%% --------------------------------------------------
+# exposure plot
+# ----------------------------------------------------
+plt.figure()
+plt.plot(ts_new[:-1],epe_mc.mean(axis=0),label='EPE')
+plt.plot(ts_new[:-1],ene_mc.mean(axis=0),label='ENE')
+plt.plot(ts_new[:-1],res_mc.mean(axis=0),label='EE(Mean)')
+plt.title('Exposure profile for IRS '+str(int(t_tnr))+'yrs')
+plt.xlabel('Time')
+plt.ylabel('Exposure')
+plt.legend()
 plt.show()
-'''
+
+#%% --------------------------------------------------
+# exposure calculation for bumped parameters
+# ----------------------------------------------------
+num_grid_new = len(ts_new)
+lst_res_mc_bump = []
+# exposure simulation
+xt_last, yt_last = x1s_bump[:,0], x2s_bump[:,0]
+for i in range(num_grid_new-1): # up to just before last grid
+    if np.min(np.abs(ts_new[i]-contract_irs['grids_float'])) < 1.0e-6: # fixing grid for float
+        x1_last, x2_last = x1s_bump[:,i], x2s_bump[:,i]
+    lst_res_mc_bump.append(pv_irs_g2pp(ts_new[i],contract_irs,params_new_bump,x1s_bump[:,i],x2s_bump[:,i],x1_last,x2_last))
+# result aggregation
+res_mc_bump = np.stack(lst_res_mc_bump,axis=0).T
+epe_mc_bump = res_mc_bump * (res_mc_bump>0.0)
+ene_mc_bump = res_mc_bump * (res_mc_bump<0.0)
+
+#%% --------------------------------------------------
+# vega map
+# ----------------------------------------------------
+# sensitivities
+epe_vega = epe_mc_bump - epe_mc
+ene_vega = ene_mc_bump - ene_mc
+res_vega = res_mc_bump - res_mc
+# figure
+plt.figure()
+plt.plot(ts_new[:-1],epe_vega.mean(axis=0),label='EPE vega')
+plt.plot(ts_new[:-1],ene_vega.mean(axis=0),label='ENE vega')
+plt.plot(ts_new[:-1],res_vega.mean(axis=0),label='EE vega')
+plt.title('Vega '+str(bump_grid)+' for Exposure profile for IRS '+str(int(t_tnr))+'yrs')
+plt.xlabel('Time')
+plt.ylabel('Exposure')
+plt.legend()
+plt.show()
 
 # %%
-
-
-
-
